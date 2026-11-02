@@ -1,0 +1,1070 @@
+/**
+ * CloudCut — standalone Cloudflare Worker video editor (v2)
+ *
+ * Deploy this single file as worker.js in Cloudflare Workers.
+ * Video processing runs in the visitor's browser using FFmpeg.wasm.
+ * The Worker only serves the HTML application; media files are not uploaded.
+ */
+
+const HTML = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#10131c">
+<title>CloudCut — Browser Video Editor</title>
+<style>
+:root{color-scheme:dark;--bg:#10131c;--panel:#191f2c;--panel2:#222c3d;--line:#344057;--text:#edf2ff;--muted:#9ba9bf;--accent:#8b7cff;--good:#45c99a;--bad:#ff7782}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Tahoma,'Noto Sans Arabic','PingFang SC','Microsoft YaHei',Roboto,sans-serif}
+header{flex-wrap:wrap;position:sticky;top:0;z-index:5;padding:15px 18px;background:#10131cf0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;backdrop-filter:blur(12px)}
+.logo{font-size:20px;font-weight:850}.logo span{color:var(--accent)}.privacy{font-size:12px;color:var(--good)}
+main{max-width:1120px;margin:22px auto;padding:0 14px 45px}.intro{margin-bottom:17px}.intro h1{font-size:25px;margin:0 0 4px}.intro p{color:var(--muted);margin:0}
+.layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);gap:15px}
+.panel{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:16px}.panel h2{font-size:16px;margin:0 0 13px}
+.drop{padding:22px 12px;text-align:center;border:1px dashed #66738d;border-radius:12px;background:#151b27;cursor:pointer}.drop.drag{border-color:var(--accent);background:#24213d}.drop strong{display:block;font-size:15px}.drop small{color:var(--muted)}
+input,select,button{font:inherit}input[type=file]{display:none}button,.filebtn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:9px 12px;border-radius:9px;cursor:pointer}.filebtn{display:inline-block}.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}button:disabled{opacity:.45;cursor:not-allowed}
+.filelist{display:grid;gap:6px;margin-top:10px}.fileitem{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;background:#141a25;border-radius:8px;overflow-wrap:anywhere}.fileitem small{color:var(--muted)}.fileitem .btns{display:flex;gap:4px;flex-shrink:0}.fileitem button{padding:3px 8px}
+video,audio,.resimg{display:block;width:100%;max-height:330px;background:#080a0f;border-radius:10px;margin-top:12px}.resimg{object-fit:contain}.note{font-size:12px;color:var(--muted);margin:9px 0}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.tab{font-size:12px;padding:7px 10px}.tab.active{background:var(--accent);border-color:var(--accent)}
+.section{display:none}.section.active{display:block}.fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{display:flex;flex-direction:column;gap:5px;min-width:0}.field.full{grid-column:1/-1}label{font-size:12px;color:var(--muted)}
+.check{flex-direction:row;align-items:center;gap:8px}.check input{width:18px;height:18px}.check label{color:var(--text);font-size:13px}
+input[type=text],input[type=number],input[type=color],select{width:100%;min-height:38px;padding:8px 9px;background:#111723;color:var(--text);border:1px solid var(--line);border-radius:8px}input[type=color]{height:40px;padding:3px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.progress{height:8px;background:#0c1018;border-radius:99px;overflow:hidden;margin:13px 0 5px}.bar{height:100%;width:0;background:linear-gradient(90deg,var(--accent),#47d4b1);transition:width .15s}
+.status{font-size:12px;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}.status.error{color:var(--bad)}.status.ok{color:var(--good)}
+.presets{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}.presets button{font-size:12px;padding:6px 10px}
+details{margin-top:12px}summary{cursor:pointer;color:var(--muted);font-size:12px}pre#log{max-height:200px;overflow:auto;background:#0c1018;border-radius:8px;padding:8px;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere;color:#b7c3d9}
+#result{display:none;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}#result a{display:inline-block;margin-top:10px;text-decoration:none}
+.langs{display:flex;gap:6px}.langs button{padding:6px 12px;font-size:13px}.langs button.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+[dir=rtl] .fileitem .btns{direction:ltr}
+footer{text-align:center;color:var(--muted);font-size:12px;margin-top:18px}
+@media(max-width:780px){.layout{grid-template-columns:1fr}header{padding:13px}.intro h1{font-size:22px}.panel{padding:13px}}
+</style>
+</head>
+<body>
+<header><div class="logo">Cloud<span>Cut</span></div><div class="langs" id="langs"><button data-lang="en">English</button><button data-lang="fa">فارسی</button><button data-lang="zh">中文</button></div><div class="privacy">● Local processing · no media upload</div></header>
+<main>
+<div class="intro"><h1>Browser Video Editor</h1><p>Trim, merge, text, subtitles, watermark, resize, colors, effects, audio, GIF and more — all in one export.</p></div>
+<div class="layout">
+<section class="panel">
+<h2>1. Media files</h2>
+<div class="drop" id="drop"><strong>Choose or drop media files</strong><small>Videos, audio, images (watermark) and SRT / ASS / VTT subtitles</small><div style="margin-top:12px"><label class="filebtn" for="files">Select files</label></div></div>
+<input id="files" type="file" multiple accept="video/*,audio/*,image/*,.srt,.ass,.ssa,.vtt">
+<div id="filelist" class="filelist"></div>
+<video id="preview" controls playsinline></video>
+<p class="note">The preview shows the first video in the list. Export processing happens locally in this browser.</p>
+<div class="actions"><button id="load" class="primary">Load FFmpeg engine</button><button id="clear">Clear files</button></div>
+</section>
+<section class="panel">
+<h2>2. Editing tools</h2>
+<div class="presets" id="presets">
+<button data-preset="tiktok">9:16 Reels/TikTok</button><button data-preset="youtube">YouTube 1080p</button><button data-preset="small">Small file</button><button data-preset="gif">GIF</button><button data-preset="mp3">MP3 audio</button><button data-preset="reset">Reset all</button>
+</div>
+<div class="tabs" id="tabs">
+<button class="tab active" data-tab="trim">Trim</button><button class="tab" data-tab="merge">Merge</button><button class="tab" data-tab="text">Text</button><button class="tab" data-tab="subs">Subtitles</button><button class="tab" data-tab="wm">Watermark</button><button class="tab" data-tab="size">Resize</button><button class="tab" data-tab="color">Colors</button><button class="tab" data-tab="fx">Effects</button><button class="tab" data-tab="audio">Audio</button><button class="tab" data-tab="out">Output</button>
+</div>
+
+<div class="tools">
+<div class="section active" id="trim">
+<div class="fields">
+<div class="field"><label>Start (seconds)</label><input id="start" type="number" min="0" step=".1" value="0"></div>
+<div class="field"><label>End (seconds; blank = end)</label><input id="end" type="number" min="0" step=".1" placeholder="End"></div>
+</div>
+<div class="actions" style="margin-top:8px"><button id="setStart">Start = preview time</button><button id="setEnd">End = preview time</button></div>
+<p class="note">Accurate trim is re-encoded. Leave end blank to use the rest of the clip. Not applied when merging.</p>
+</div>
+
+<div class="section" id="merge">
+<div class="field check"><input id="mergeOn" type="checkbox"><label for="mergeOn">Merge all videos in the list into one (in the order shown)</label></div>
+<p class="note">Use ▲ ▼ in the media list to reorder. Clips are scaled to the first clip's size automatically. Audio is kept only if every clip has audio.</p>
+</div>
+
+<div class="section" id="text">
+<div class="fields">
+<div class="field full"><label>Text overlay</label><input id="overlayText" type="text" placeholder="Enter text to add"></div>
+<div class="field"><label>Font size</label><input id="fontSize" type="number" min="8" max="200" value="36"></div>
+<div class="field"><label>Text color</label><input id="fontColor" type="color" value="#ffffff"></div>
+<div class="field"><label>Horizontal position</label><select id="textX"><option value="center">Center</option><option value="left">Left</option><option value="right">Right</option></select></div>
+<div class="field"><label>Vertical position</label><select id="textY"><option value="bottom">Bottom</option><option value="center">Center</option><option value="top">Top</option></select></div>
+<div class="field"><label>Show from (s, optional)</label><input id="textFrom" type="number" min="0" step=".1" placeholder="always"></div>
+<div class="field"><label>Show until (s, optional)</label><input id="textTo" type="number" min="0" step=".1" placeholder="always"></div>
+</div><p class="note">A font (Arial) is downloaded automatically the first time text or hard subtitles are used.</p>
+</div>
+
+<div class="section" id="subs">
+<div class="fields">
+<div class="field full"><label>Subtitle file</label><select id="subtitle"><option value="">None</option></select></div>
+<div class="field"><label>Subtitle mode</label><select id="subMode"><option value="hard">Hard subtitles (burn in)</option><option value="soft">Soft subtitle track</option></select></div>
+<div class="field"><label>Hard subtitle font size</label><input id="subSize" type="number" min="8" max="100" value="24"></div>
+</div><p class="note">Soft subtitles are a separate selectable track (MP4 uses mov_text). With hard subtitles, start subtitles at 0 or leave Trim start at 0 to keep timing aligned.</p>
+</div>
+
+<div class="section" id="wm">
+<div class="fields">
+<div class="field full"><label>Watermark / logo image</label><select id="wmFile"><option value="">None</option></select></div>
+<div class="field"><label>Position</label><select id="wmPos"><option value="br">Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option><option value="c">Center</option></select></div>
+<div class="field"><label>Width (px)</label><input id="wmWidth" type="number" min="16" max="2000" value="160"></div>
+<div class="field"><label>Opacity (0–1)</label><input id="wmOpacity" type="number" min="0" max="1" step=".05" value="0.8"></div>
+</div><p class="note">Load a PNG/JPG/WebP in the media list, then choose it here.</p>
+</div>
+
+<div class="section" id="size">
+<div class="fields">
+<div class="field"><label>Crop to aspect (center)</label><select id="cropAspect"><option value="">None</option><option value="1:1">1:1 square</option><option value="16:9">16:9</option><option value="9:16">9:16 vertical</option><option value="4:3">4:3</option><option value="4:5">4:5</option></select></div>
+<div class="field"><label>Resolution</label><select id="preset"><option value="orig" selected>Keep original</option><option value="1920:1080">1080p</option><option value="1280:720">720p</option><option value="854:480">480p</option><option value="640:360">360p</option><option value="1080:1920">1080×1920 vertical</option><option value="720:1280">720×1280 vertical</option><option value="custom">Custom</option></select></div>
+<div class="field"><label>Fit mode</label><select id="fit"><option value="contain">Fit / letterbox</option><option value="crop">Fill / crop</option><option value="stretch">Stretch</option></select></div>
+<div class="field"></div>
+<div class="field"><label>Custom width</label><input id="width" type="number" min="2" value="1280"></div>
+<div class="field"><label>Custom height</label><input id="height" type="number" min="2" value="720"></div>
+</div>
+</div>
+
+<div class="section" id="color">
+<div class="fields">
+<div class="field"><label>Brightness (-1 to 1)</label><input id="brightness" type="number" step=".05" min="-1" max="1" value="0"></div>
+<div class="field"><label>Contrast (0 to 3)</label><input id="contrast" type="number" step=".1" min="0" max="3" value="1"></div>
+<div class="field"><label>Saturation (0 to 3)</label><input id="saturation" type="number" step=".1" min="0" max="3" value="1"></div>
+<div class="field"><label>Gamma (.1 to 10)</label><input id="gamma" type="number" step=".1" min=".1" max="10" value="1"></div>
+</div>
+</div>
+
+<div class="section" id="fx">
+<div class="fields">
+<div class="field"><label>Playback speed</label><select id="speed"><option value=".25">0.25×</option><option value=".5">0.5×</option><option value=".75">0.75×</option><option value="1" selected>Normal</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="3">3×</option><option value="4">4×</option></select></div>
+<div class="field"><label>Rotation</label><select id="rotation"><option value="0">None</option><option value="90">90° clockwise</option><option value="180">180°</option><option value="270">270° clockwise</option></select></div>
+<div class="field"><label>Filter</label><select id="fx1"><option value="">None</option><option value="gray">Black &amp; white</option><option value="sepia">Sepia</option><option value="negate">Negative</option><option value="blur">Blur</option><option value="sharpen">Sharpen</option><option value="denoise">Denoise</option><option value="vignette">Vignette</option></select></div>
+<div class="field"><label>Frame rate</label><select id="fps"><option value="">Original</option><option value="60">60 fps</option><option value="30">30 fps</option><option value="24">24 fps</option><option value="15">15 fps</option></select></div>
+<div class="field"><label>Fade in/out (seconds, video + audio)</label><input id="fade" type="number" min="0" step=".5" value="0"></div>
+<div class="field check" style="margin-top:20px"><input id="flipH" type="checkbox"><label for="flipH">Flip horizontal</label></div>
+<div class="field check"><input id="flipV" type="checkbox"><label for="flipV">Flip vertical</label></div>
+<div class="field check"><input id="reverse" type="checkbox"><label for="reverse">Reverse (short clips only)</label></div>
+</div>
+</div>
+
+<div class="section" id="audio">
+<div class="fields">
+<div class="field"><label>Audio action</label><select id="audioMode"><option value="keep">Keep original audio</option><option value="remove">Remove audio</option><option value="replace">Replace with audio file</option><option value="mix">Mix audio with original</option></select></div>
+<div class="field"><label>Audio file</label><select id="audioFile"><option value="">Choose loaded audio</option></select></div>
+<div class="field"><label>Original volume (0–3)</label><input id="origVol" type="number" min="0" max="3" step=".1" value="1"></div>
+<div class="field"><label>Added volume (0–3)</label><input id="addedVol" type="number" min="0" max="3" step=".1" value="1"></div>
+<div class="field check"><input id="normalize" type="checkbox"><label for="normalize">Normalize loudness</label></div>
+</div><p class="note">To extract audio, choose MP3 or WAV in the Output tab.</p>
+</div>
+
+<div class="section" id="out">
+<div class="fields">
+<div class="field"><label>Output format</label><select id="format"><option value="mp4">MP4 (H.264/AAC)</option><option value="webm">WebM (VP9/Opus)</option><option value="mkv">MKV</option><option value="gif">GIF (animated)</option><option value="mp3">MP3 (audio only)</option><option value="wav">WAV (audio only)</option><option value="jpg">JPG (single frame at Start)</option></select></div>
+<div class="field"><label>Output filename</label><input id="filename" type="text" value="edited-video"></div>
+<div class="field"><label>Quality (CRF, lower = better, 18–35)</label><input id="crf" type="number" min="15" max="40" value="23"></div>
+<div class="field"><label>Encoding speed</label><select id="encPreset"><option value="ultrafast" selected>Fastest (bigger file)</option><option value="veryfast">Fast</option><option value="medium">Balanced (slower, smaller)</option></select></div>
+<div class="field"><label>GIF frame rate</label><input id="gifFps" type="number" min="1" max="30" value="12"></div>
+<div class="field"><label>GIF width (px)</label><input id="gifWidth" type="number" min="64" max="1280" value="480"></div>
+</div><p class="note">MP4 is the most compatible. WebM/VP9 is slow in the browser.</p>
+</div>
+</div>
+
+<div class="actions"><button id="export" class="primary" disabled>Export</button><button id="stop" disabled>Stop processing</button></div>
+<div class="progress"><div class="bar" id="bar"></div></div>
+<div class="status" id="status">Select media files — FFmpeg loads automatically.</div>
+<div class="actions"><button id="av1btn" style="display:none">Convert with browser decoder, then retry</button></div>
+<div id="result">
+<strong>Result</strong>
+<video id="resVideo" controls playsinline style="display:none"></video>
+<audio id="resAudio" controls style="display:none"></audio>
+<img id="resImg" class="resimg" alt="" style="display:none">
+<a id="dl" class="filebtn primary" href="#">Download</a>
+</div>
+<details id="logbox"><summary>FFmpeg log</summary><pre id="log"></pre></details>
+</section>
+</div>
+<footer>CloudCut uses FFmpeg.wasm in your browser. Your media is not uploaded to this Cloudflare Worker.</footer>
+</main>
+
+<script>
+(() => {
+ 'use strict';
+ const $ = id => document.getElementById(id);
+ const state = {files:[],ffmpeg:null,loaded:false,loading:false,busy:false,stopRequested:false,previewUrl:null,outUrl:null,sink:null,fontReady:false,transcoded:new Map(),transcoding:false,abortTranscode:false};
+ const CDNS = ['https://cdn.jsdelivr.net/npm','https://unpkg.com'];
+ const FF_VER = '0.12.10', CORE_VER = '0.12.6';
+ const FONT_URLS = ['https://cdn.jsdelivr.net/gh/ffmpegwasm/testdata@master/arial.ttf'];
+
+ /*TR_START*/
+ const TR = {
+ fa: {
+  "CloudCut — Browser Video Editor":"CloudCut — ویرایشگر ویدیو در مرورگر",
+  "● Local processing · no media upload":"● پردازش محلی · بدون آپلود رسانه",
+  "Browser Video Editor":"ویرایشگر ویدیو در مرورگر",
+  "Trim, merge, text, subtitles, watermark, resize, colors, effects, audio, GIF and more — all in one export.":"برش، ادغام، متن، زیرنویس، واترمارک، تغییر اندازه، رنگ، افکت، صدا، GIF و بیشتر — همه در یک خروجی.",
+  "1. Media files":"۱. فایل‌های رسانه",
+  "Choose or drop media files":"فایل‌های رسانه را انتخاب یا رها کنید",
+  "Videos, audio, images (watermark) and SRT / ASS / VTT subtitles":"ویدیو، صدا، تصویر (واترمارک) و زیرنویس SRT / ASS / VTT",
+  "Select files":"انتخاب فایل‌ها",
+  "The preview shows the first video in the list. Export processing happens locally in this browser.":"پیش‌نمایش، اولین ویدیوی فهرست را نشان می‌دهد. پردازش خروجی به‌صورت محلی در همین مرورگر انجام می‌شود.",
+  "Load FFmpeg engine":"بارگذاری موتور FFmpeg",
+  "Clear files":"پاک کردن فایل‌ها",
+  "2. Editing tools":"۲. ابزارهای ویرایش",
+  "9:16 Reels/TikTok":"۹:۱۶ ریلز/تیک‌تاک",
+  "YouTube 1080p":"یوتیوب 1080p",
+  "Small file":"فایل کم‌حجم",
+  "MP3 audio":"صدای MP3",
+  "Reset all":"بازنشانی همه",
+  "Trim":"برش","Merge":"ادغام","Text":"متن","Subtitles":"زیرنویس","Watermark":"واترمارک","Resize":"اندازه","Colors":"رنگ","Effects":"افکت‌ها","Audio":"صدا","Output":"خروجی",
+  "Start (seconds)":"شروع (ثانیه)",
+  "End (seconds; blank = end)":"پایان (ثانیه؛ خالی = تا انتها)",
+  "End":"پایان",
+  "Start = preview time":"شروع = زمان پیش‌نمایش",
+  "End = preview time":"پایان = زمان پیش‌نمایش",
+  "Accurate trim is re-encoded. Leave end blank to use the rest of the clip. Not applied when merging.":"برش دقیق با بازکدگذاری انجام می‌شود. برای استفاده از بقیهٔ کلیپ، پایان را خالی بگذارید. هنگام ادغام اعمال نمی‌شود.",
+  "Merge all videos in the list into one (in the order shown)":"ادغام همهٔ ویدیوهای فهرست در یک ویدیو (به ترتیب نمایش)",
+  "Use ▲ ▼ in the media list to reorder. Clips are scaled to the first clip's size automatically. Audio is kept only if every clip has audio.":"برای تغییر ترتیب از ▲ ▼ در فهرست رسانه استفاده کنید. کلیپ‌ها خودکار به اندازهٔ کلیپ اول تغییر اندازه می‌یابند. صدا فقط وقتی حفظ می‌شود که همهٔ کلیپ‌ها صدا داشته باشند.",
+  "Text overlay":"متن روی ویدیو",
+  "Enter text to add":"متن را وارد کنید",
+  "Font size":"اندازهٔ فونت",
+  "Text color":"رنگ متن",
+  "Horizontal position":"موقعیت افقی",
+  "Vertical position":"موقعیت عمودی",
+  "Center":"وسط","Left":"چپ","Right":"راست","Bottom":"پایین","Top":"بالا",
+  "Show from (s, optional)":"نمایش از (ثانیه، اختیاری)",
+  "Show until (s, optional)":"نمایش تا (ثانیه، اختیاری)",
+  "always":"همیشه",
+  "A font (Arial) is downloaded automatically the first time text or hard subtitles are used.":"هنگام نخستین استفاده از متن یا زیرنویس ثابت، یک فونت (Arial) به‌طور خودکار دانلود می‌شود.",
+  "Subtitle file":"فایل زیرنویس",
+  "None":"هیچ",
+  "Subtitle mode":"حالت زیرنویس",
+  "Hard subtitles (burn in)":"زیرنویس ثابت (روی تصویر)",
+  "Soft subtitle track":"مسیر زیرنویس جداگانه",
+  "Hard subtitle font size":"اندازهٔ فونت زیرنویس ثابت",
+  "Soft subtitles are a separate selectable track (MP4 uses mov_text). With hard subtitles, start subtitles at 0 or leave Trim start at 0 to keep timing aligned.":"زیرنویس جداگانه یک مسیر قابل انتخاب است (MP4 از mov_text استفاده می‌کند). برای زیرنویس ثابت، جهت هماهنگ ماندن زمان‌بندی، شروع برش را روی ۰ بگذارید.",
+  "Watermark / logo image":"تصویر واترمارک / لوگو",
+  "Position":"موقعیت",
+  "Bottom right":"پایین راست","Bottom left":"پایین چپ","Top right":"بالا راست","Top left":"بالا چپ",
+  "Width (px)":"عرض (پیکسل)",
+  "Opacity (0–1)":"شفافیت (۰ تا ۱)",
+  "Load a PNG/JPG/WebP in the media list, then choose it here.":"یک تصویر PNG/JPG/WebP را در فهرست رسانه بارگذاری کنید و سپس اینجا انتخاب کنید.",
+  "Crop to aspect (center)":"برش به نسبت (از مرکز)",
+  "1:1 square":"1:1 مربع",
+  "9:16 vertical":"9:16 عمودی",
+  "Resolution":"وضوح",
+  "Keep original":"حفظ اصلی",
+  "1080×1920 vertical":"1080×1920 عمودی",
+  "720×1280 vertical":"720×1280 عمودی",
+  "Custom":"سفارشی",
+  "Fit mode":"حالت تطبیق",
+  "Fit / letterbox":"جا دادن / با حاشیه",
+  "Fill / crop":"پر کردن / برش",
+  "Stretch":"کشیدن",
+  "Custom width":"عرض سفارشی",
+  "Custom height":"ارتفاع سفارشی",
+  "Brightness (-1 to 1)":"روشنایی (۱- تا ۱)",
+  "Contrast (0 to 3)":"کنتراست (۰ تا ۳)",
+  "Saturation (0 to 3)":"اشباع رنگ (۰ تا ۳)",
+  "Gamma (.1 to 10)":"گاما (۰٫۱ تا ۱۰)",
+  "Playback speed":"سرعت پخش",
+  "Normal":"عادی",
+  "Rotation":"چرخش",
+  "90° clockwise":"۹۰ درجه ساعتگرد",
+  "180°":"۱۸۰ درجه",
+  "270° clockwise":"۲۷۰ درجه ساعتگرد",
+  "Filter":"فیلتر",
+  "Black & white":"سیاه و سفید",
+  "Sepia":"سپیا","Negative":"نگاتیو","Blur":"تاری","Sharpen":"شارپ","Denoise":"حذف نویز","Vignette":"حاشیهٔ تیره",
+  "Frame rate":"نرخ فریم",
+  "Original":"اصلی",
+  "Fade in/out (seconds, video + audio)":"محو شدن ابتدا/انتها (ثانیه، تصویر و صدا)",
+  "Flip horizontal":"وارونگی افقی",
+  "Flip vertical":"وارونگی عمودی",
+  "Reverse (short clips only)":"معکوس (فقط کلیپ‌های کوتاه)",
+  "Audio action":"عملیات صدا",
+  "Keep original audio":"حفظ صدای اصلی",
+  "Remove audio":"حذف صدا",
+  "Replace with audio file":"جایگزینی با فایل صوتی",
+  "Mix audio with original":"ترکیب صدا با صدای اصلی",
+  "Audio file":"فایل صوتی",
+  "Choose loaded audio":"انتخاب صدای بارگذاری‌شده",
+  "Original volume (0–3)":"بلندی صدای اصلی (۰ تا ۳)",
+  "Added volume (0–3)":"بلندی صدای افزوده (۰ تا ۳)",
+  "Normalize loudness":"یکسان‌سازی بلندی صدا",
+  "To extract audio, choose MP3 or WAV in the Output tab.":"برای استخراج صدا، در تب خروجی، MP3 یا WAV را انتخاب کنید.",
+  "Output format":"فرمت خروجی",
+  "GIF (animated)":"GIF (متحرک)",
+  "MP3 (audio only)":"MP3 (فقط صدا)",
+  "WAV (audio only)":"WAV (فقط صدا)",
+  "JPG (single frame at Start)":"JPG (یک فریم در زمان شروع)",
+  "Output filename":"نام فایل خروجی",
+  "Quality (CRF, lower = better, 18–35)":"کیفیت (CRF، کمتر = بهتر، ۱۸ تا ۳۵)",
+  "Encoding speed":"سرعت کدگذاری",
+  "Fastest (bigger file)":"سریع‌ترین (حجم بیشتر)",
+  "Fast":"سریع",
+  "Balanced (slower, smaller)":"متعادل (کندتر، کم‌حجم‌تر)",
+  "GIF frame rate":"نرخ فریم GIF",
+  "GIF width (px)":"عرض GIF (پیکسل)",
+  "MP4 is the most compatible. WebM/VP9 is slow in the browser.":"MP4 سازگارترین فرمت است. WebM/VP9 در مرورگر کند است.",
+  "Export":"خروجی گرفتن",
+  "Stop processing":"توقف پردازش",
+  "Convert with browser decoder, then retry":"تبدیل با دیکدر مرورگر و تلاش دوباره",
+  "Result":"نتیجه",
+  "Download":"دانلود",
+  "FFmpeg log":"گزارش FFmpeg",
+  "CloudCut uses FFmpeg.wasm in your browser. Your media is not uploaded to this Cloudflare Worker.":"CloudCut از FFmpeg.wasm در مرورگر شما استفاده می‌کند. رسانهٔ شما به این Cloudflare Worker آپلود نمی‌شود.",
+  "video":"ویدیو","audio":"صدا","subtitle":"زیرنویس","image":"تصویر","file":"فایل",
+  "Move up":"انتقال به بالا","Move down":"انتقال به پایین","Remove file":"حذف فایل",
+  "Select media files — FFmpeg loads automatically.":"فایل‌های رسانه را انتخاب کنید — FFmpeg خودکار بارگذاری می‌شود.",
+  "Preset applied: {0}. Adjust anything else, then Export.":"پیش‌تنظیم «{0}» اعمال شد. بقیه را تنظیم کنید و سپس خروجی بگیرید.",
+  "Downloading FFmpeg from {0}… (first load can take a moment)":"در حال دانلود FFmpeg از {0}… (بارگذاری اول ممکن است کمی طول بکشد)",
+  "Processing… {0}% (keep this tab open)":"در حال پردازش… {0}٪ (این تب را باز نگه دارید)",
+  "FFmpeg is ready. Pick your tools and export.":"FFmpeg آماده است. ابزارها را انتخاب و خروجی بگیرید.",
+  "Could not load FFmpeg: {0}\nCheck your internet connection or whether jsDelivr/unpkg are blocked.":"بارگذاری FFmpeg ناموفق بود: {0}\nاتصال اینترنت را بررسی کنید یا ببینید jsDelivr/unpkg مسدود نشده باشند.",
+  "Loading FFmpeg…":"در حال بارگذاری FFmpeg…",
+  "FFmpeg ready":"FFmpeg آماده است",
+  "Retry loading FFmpeg":"تلاش دوباره برای بارگذاری FFmpeg",
+  "Reload FFmpeg engine":"بارگذاری دوبارهٔ موتور FFmpeg",
+  "Please select a video first.":"ابتدا یک ویدیو انتخاب کنید.",
+  "Select an audio file first (Audio tab).":"ابتدا یک فایل صوتی انتخاب کنید (تب صدا).",
+  "End time must be greater than start time.":"زمان پایان باید بیشتر از زمان شروع باشد.",
+  "These files are very large for browser memory (limit is roughly 2 GB). Try shorter clips.":"این فایل‌ها برای حافظهٔ مرورگر بسیار بزرگ‌اند (حدود ۲ گیگابایت). کلیپ‌های کوتاه‌تر را امتحان کنید.",
+  "Preparing selected files…":"در حال آماده‌سازی فایل‌های انتخابی…",
+  "The selected file has no video stream.":"فایل انتخابی جریان ویدیویی ندارد.",
+  "Every clip needs an audio stream to build audio-only output.":"برای خروجی فقط‌صوتی، همهٔ کلیپ‌ها باید صدا داشته باشند.",
+  "No audio stream found in the selected file.":"در فایل انتخابی جریان صوتی پیدا نشد.",
+  "Processing in your browser. Keep this tab open; large files may take several minutes…":"پردازش در مرورگر شما انجام می‌شود. این تب را باز نگه دارید؛ فایل‌های بزرگ ممکن است چند دقیقه طول بکشند…",
+  "Processing stopped.":"پردازش متوقف شد.",
+  "FFmpeg exited with code {0}. Open the FFmpeg log for details.":"FFmpeg با کد {0} متوقف شد. برای جزئیات، گزارش FFmpeg را باز کنید.",
+  "Could not download the font needed for text/subtitles ({0}).":"دانلود فونت لازم برای متن/زیرنویس ناموفق بود ({0}).",
+  "Export complete: {0} ({1}). Preview below — tap Download to save.":"خروجی آماده شد: {0} ({1}). پیش‌نمایش در پایین است — برای ذخیره، دانلود را بزنید.",
+  "Export failed: {0}\nTry a shorter clip, MP4 input, or fewer options at once. The FFmpeg build may not include a requested filter or codec.":"خروجی ناموفق بود: {0}\nکلیپ کوتاه‌تر، ورودی MP4 یا گزینه‌های کمتر را امتحان کنید. ممکن است نسخهٔ FFmpeg فیلتر یا کدک درخواستی را نداشته باشد.",
+  "This video uses the AV1 codec, which FFmpeg.wasm cannot decode.\nTap the button below: your browser (which can decode AV1) will play and re-encode it to WebM in real time, then the export retries automatically. Keep this tab open and in front.":"این ویدیو از کدک AV1 استفاده می‌کند که FFmpeg.wasm نمی‌تواند آن را دیکد کند.\nدکمهٔ زیر را بزنید: مرورگر شما (که AV1 را پشتیبانی می‌کند) آن را در زمان واقعی پخش و به WebM بازکدگذاری می‌کند و سپس خروجی خودکار دوباره تلاش می‌شود. این تب را باز و جلوی صفحه نگه دارید.",
+  "Stopped. Reload the FFmpeg engine before the next export.":"متوقف شد. پیش از خروجی بعدی، موتور FFmpeg را دوباره بارگذاری کنید.",
+  "Your browser cannot decode this video either.":"مرورگر شما هم نمی‌تواند این ویدیو را دیکد کند.",
+  "This browser cannot capture video (try Chrome, Edge or Firefox on desktop).":"این مرورگر نمی‌تواند ویدیو را ضبط کند (Chrome، Edge یا Firefox دسکتاپ را امتحان کنید).",
+  "This browser cannot record WebM.":"این مرورگر نمی‌تواند WebM ضبط کند.",
+  "Re-encoding with browser decoder: {0}% (real time, keep this tab open)":"بازکدگذاری با دیکدر مرورگر: {0}٪ (زمان واقعی، این تب را باز نگه دارید)",
+  "Re-encoding cancelled.":"بازکدگذاری لغو شد.",
+  "Browser re-encode failed: {0}":"بازکدگذاری در مرورگر ناموفق بود: {0}"
+ },
+ zh: {
+  "CloudCut — Browser Video Editor":"CloudCut — 浏览器视频编辑器",
+  "● Local processing · no media upload":"● 本地处理 · 不上传媒体",
+  "Browser Video Editor":"浏览器视频编辑器",
+  "Trim, merge, text, subtitles, watermark, resize, colors, effects, audio, GIF and more — all in one export.":"裁剪、合并、文字、字幕、水印、调整尺寸、调色、特效、音频、GIF 等 — 一次导出全部完成。",
+  "1. Media files":"1. 媒体文件",
+  "Choose or drop media files":"选择或拖放媒体文件",
+  "Videos, audio, images (watermark) and SRT / ASS / VTT subtitles":"视频、音频、图片（水印）以及 SRT / ASS / VTT 字幕",
+  "Select files":"选择文件",
+  "The preview shows the first video in the list. Export processing happens locally in this browser.":"预览显示列表中的第一个视频。导出处理在本浏览器中本地完成。",
+  "Load FFmpeg engine":"加载 FFmpeg 引擎",
+  "Clear files":"清空文件",
+  "2. Editing tools":"2. 编辑工具",
+  "9:16 Reels/TikTok":"9:16 短视频竖屏",
+  "Small file":"小体积",
+  "MP3 audio":"MP3 音频",
+  "Reset all":"全部重置",
+  "Trim":"裁剪","Merge":"合并","Text":"文字","Subtitles":"字幕","Watermark":"水印","Resize":"尺寸","Colors":"颜色","Effects":"特效","Audio":"音频","Output":"输出",
+  "Start (seconds)":"开始（秒）",
+  "End (seconds; blank = end)":"结束（秒；留空 = 到结尾）",
+  "End":"结束",
+  "Start = preview time":"开始 = 预览时间",
+  "End = preview time":"结束 = 预览时间",
+  "Accurate trim is re-encoded. Leave end blank to use the rest of the clip. Not applied when merging.":"精确裁剪需要重新编码。结束留空则使用片段的其余部分。合并时不适用。",
+  "Merge all videos in the list into one (in the order shown)":"将列表中的所有视频按显示顺序合并为一个",
+  "Use ▲ ▼ in the media list to reorder. Clips are scaled to the first clip's size automatically. Audio is kept only if every clip has audio.":"使用媒体列表中的 ▲ ▼ 调整顺序。所有片段会自动缩放到第一个片段的尺寸。只有每个片段都有音频时才会保留音频。",
+  "Text overlay":"文字叠加",
+  "Enter text to add":"输入要添加的文字",
+  "Font size":"字号",
+  "Text color":"文字颜色",
+  "Horizontal position":"水平位置",
+  "Vertical position":"垂直位置",
+  "Center":"居中","Left":"靠左","Right":"靠右","Bottom":"底部","Top":"顶部",
+  "Show from (s, optional)":"显示起始（秒，可选）",
+  "Show until (s, optional)":"显示截止（秒，可选）",
+  "always":"始终",
+  "A font (Arial) is downloaded automatically the first time text or hard subtitles are used.":"首次使用文字或硬字幕时会自动下载字体（Arial）。",
+  "Subtitle file":"字幕文件",
+  "None":"无",
+  "Subtitle mode":"字幕模式",
+  "Hard subtitles (burn in)":"硬字幕（烧录到画面）",
+  "Soft subtitle track":"软字幕轨道",
+  "Hard subtitle font size":"硬字幕字号",
+  "Soft subtitles are a separate selectable track (MP4 uses mov_text). With hard subtitles, start subtitles at 0 or leave Trim start at 0 to keep timing aligned.":"软字幕是可单独选择的轨道（MP4 使用 mov_text）。使用硬字幕时，请将裁剪起点保持为 0 以保证时间对齐。",
+  "Watermark / logo image":"水印 / Logo 图片",
+  "Position":"位置",
+  "Bottom right":"右下","Bottom left":"左下","Top right":"右上","Top left":"左上",
+  "Width (px)":"宽度（像素）",
+  "Opacity (0–1)":"不透明度（0–1）",
+  "Load a PNG/JPG/WebP in the media list, then choose it here.":"先在媒体列表中加载 PNG/JPG/WebP 图片，然后在此选择。",
+  "Crop to aspect (center)":"按比例居中裁剪",
+  "1:1 square":"1:1 方形",
+  "9:16 vertical":"9:16 竖屏",
+  "Resolution":"分辨率",
+  "Keep original":"保持原始",
+  "1080×1920 vertical":"1080×1920 竖屏",
+  "720×1280 vertical":"720×1280 竖屏",
+  "Custom":"自定义",
+  "Fit mode":"适配模式",
+  "Fit / letterbox":"适应 / 加黑边",
+  "Fill / crop":"填充 / 裁剪",
+  "Stretch":"拉伸",
+  "Custom width":"自定义宽度",
+  "Custom height":"自定义高度",
+  "Brightness (-1 to 1)":"亮度（-1 到 1）",
+  "Contrast (0 to 3)":"对比度（0 到 3）",
+  "Saturation (0 to 3)":"饱和度（0 到 3）",
+  "Gamma (.1 to 10)":"伽马（0.1 到 10）",
+  "Playback speed":"播放速度",
+  "Normal":"正常",
+  "Rotation":"旋转",
+  "90° clockwise":"顺时针 90°",
+  "270° clockwise":"顺时针 270°",
+  "Filter":"滤镜",
+  "Black & white":"黑白",
+  "Sepia":"复古褐","Negative":"反色","Blur":"模糊","Sharpen":"锐化","Denoise":"降噪","Vignette":"暗角",
+  "Frame rate":"帧率",
+  "Original":"原始",
+  "Fade in/out (seconds, video + audio)":"淡入淡出（秒，画面和声音）",
+  "Flip horizontal":"水平翻转",
+  "Flip vertical":"垂直翻转",
+  "Reverse (short clips only)":"倒放（仅限短片段）",
+  "Audio action":"音频操作",
+  "Keep original audio":"保留原音频",
+  "Remove audio":"移除音频",
+  "Replace with audio file":"替换为音频文件",
+  "Mix audio with original":"与原音频混合",
+  "Audio file":"音频文件",
+  "Choose loaded audio":"选择已加载的音频",
+  "Original volume (0–3)":"原音量（0–3）",
+  "Added volume (0–3)":"添加音量（0–3）",
+  "Normalize loudness":"响度标准化",
+  "To extract audio, choose MP3 or WAV in the Output tab.":"如需提取音频，请在“输出”选项卡中选择 MP3 或 WAV。",
+  "Output format":"输出格式",
+  "GIF (animated)":"GIF（动图）",
+  "MP3 (audio only)":"MP3（仅音频）",
+  "WAV (audio only)":"WAV（仅音频）",
+  "JPG (single frame at Start)":"JPG（开始处的单帧）",
+  "Output filename":"输出文件名",
+  "Quality (CRF, lower = better, 18–35)":"质量（CRF，越小越好，18–35）",
+  "Encoding speed":"编码速度",
+  "Fastest (bigger file)":"最快（文件较大）",
+  "Fast":"快",
+  "Balanced (slower, smaller)":"均衡（较慢，文件较小）",
+  "GIF frame rate":"GIF 帧率",
+  "GIF width (px)":"GIF 宽度（像素）",
+  "MP4 is the most compatible. WebM/VP9 is slow in the browser.":"MP4 兼容性最好。WebM/VP9 在浏览器中较慢。",
+  "Export":"导出",
+  "Stop processing":"停止处理",
+  "Convert with browser decoder, then retry":"使用浏览器解码器转换后重试",
+  "Result":"结果",
+  "Download":"下载",
+  "FFmpeg log":"FFmpeg 日志",
+  "CloudCut uses FFmpeg.wasm in your browser. Your media is not uploaded to this Cloudflare Worker.":"CloudCut 在您的浏览器中使用 FFmpeg.wasm。您的媒体不会上传到此 Cloudflare Worker。",
+  "video":"视频","audio":"音频","subtitle":"字幕","image":"图片","file":"文件",
+  "Move up":"上移","Move down":"下移","Remove file":"移除文件",
+  "Select media files — FFmpeg loads automatically.":"请选择媒体文件 — FFmpeg 会自动加载。",
+  "Preset applied: {0}. Adjust anything else, then Export.":"已应用预设：{0}。可继续调整其他选项，然后点击导出。",
+  "Downloading FFmpeg from {0}… (first load can take a moment)":"正在从 {0} 下载 FFmpeg…（首次加载可能需要一些时间）",
+  "Processing… {0}% (keep this tab open)":"处理中… {0}%（请保持此标签页打开）",
+  "FFmpeg is ready. Pick your tools and export.":"FFmpeg 已就绪。请选择工具并导出。",
+  "Could not load FFmpeg: {0}\nCheck your internet connection or whether jsDelivr/unpkg are blocked.":"无法加载 FFmpeg：{0}\n请检查网络连接，或 jsDelivr/unpkg 是否被屏蔽。",
+  "Loading FFmpeg…":"正在加载 FFmpeg…",
+  "FFmpeg ready":"FFmpeg 已就绪",
+  "Retry loading FFmpeg":"重试加载 FFmpeg",
+  "Reload FFmpeg engine":"重新加载 FFmpeg 引擎",
+  "Please select a video first.":"请先选择一个视频。",
+  "Select an audio file first (Audio tab).":"请先选择音频文件（音频选项卡）。",
+  "End time must be greater than start time.":"结束时间必须大于开始时间。",
+  "These files are very large for browser memory (limit is roughly 2 GB). Try shorter clips.":"这些文件对浏览器内存来说太大（上限约 2 GB）。请尝试较短的片段。",
+  "Preparing selected files…":"正在准备所选文件…",
+  "The selected file has no video stream.":"所选文件没有视频流。",
+  "Every clip needs an audio stream to build audio-only output.":"要生成纯音频输出，每个片段都必须有音频流。",
+  "No audio stream found in the selected file.":"所选文件中未找到音频流。",
+  "Processing in your browser. Keep this tab open; large files may take several minutes…":"正在浏览器中处理。请保持此标签页打开；大文件可能需要几分钟…",
+  "Processing stopped.":"处理已停止。",
+  "FFmpeg exited with code {0}. Open the FFmpeg log for details.":"FFmpeg 以代码 {0} 退出。详情请打开 FFmpeg 日志。",
+  "Could not download the font needed for text/subtitles ({0}).":"无法下载文字/字幕所需的字体（{0}）。",
+  "Export complete: {0} ({1}). Preview below — tap Download to save.":"导出完成：{0}（{1}）。下方可预览 — 点击“下载”保存。",
+  "Export failed: {0}\nTry a shorter clip, MP4 input, or fewer options at once. The FFmpeg build may not include a requested filter or codec.":"导出失败：{0}\n请尝试较短的片段、MP4 输入或减少同时使用的选项。该 FFmpeg 构建可能不包含所需的滤镜或编解码器。",
+  "This video uses the AV1 codec, which FFmpeg.wasm cannot decode.\nTap the button below: your browser (which can decode AV1) will play and re-encode it to WebM in real time, then the export retries automatically. Keep this tab open and in front.":"此视频使用 AV1 编码，FFmpeg.wasm 无法解码。\n请点击下方按钮：您的浏览器（支持 AV1 解码）会实时播放并重新编码为 WebM，然后自动重试导出。请保持此标签页打开并置于前台。",
+  "Stopped. Reload the FFmpeg engine before the next export.":"已停止。下次导出前请重新加载 FFmpeg 引擎。",
+  "Your browser cannot decode this video either.":"您的浏览器也无法解码此视频。",
+  "This browser cannot capture video (try Chrome, Edge or Firefox on desktop).":"此浏览器无法捕获视频（请尝试桌面版 Chrome、Edge 或 Firefox）。",
+  "This browser cannot record WebM.":"此浏览器无法录制 WebM。",
+  "Re-encoding with browser decoder: {0}% (real time, keep this tab open)":"正在使用浏览器解码器重新编码：{0}%（实时，请保持此标签页打开）",
+  "Re-encoding cancelled.":"重新编码已取消。",
+  "Browser re-encode failed: {0}":"浏览器重新编码失败：{0}"
+ }
+ };
+ /*TR_END*/
+
+ let lang = 'en';
+ const t = (msg,vars) => {
+   let out = (lang!=='en'&&TR[lang]&&TR[lang][msg]) || msg;
+   if(vars)out = out.replace(/\{(\d+)\}/g,(m,i)=>vars[i]!==undefined?vars[i]:m);
+   return out;
+ };
+ const E = (msg,vars) => {const e=new Error(msg);e.vars=vars;return e;};
+ const errMsg = err => err&&err.message?t(err.message,err.vars):String(err);
+ const SKIP_IDS = new Set(['filelist','status','log']);
+ function walk(root) {
+   const d = lang==='en'?null:TR[lang];
+   const tw = document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT,{acceptNode(n){
+     if(n.nodeType===1&&(n.tagName==='SCRIPT'||n.tagName==='STYLE'||n.tagName==='PRE'||SKIP_IDS.has(n.id)||n.classList.contains('langs')))return NodeFilter.FILTER_REJECT;
+     return NodeFilter.FILTER_ACCEPT;
+   }});
+   const nodes=[];let n=tw.currentNode;
+   while(n){nodes.push(n);n=tw.nextNode();}
+   for(const node of nodes) {
+     if(node.nodeType===1) {
+       for(const a of ['placeholder','title']) {
+         if(!node.hasAttribute(a))continue;
+         const k='__en_'+a;
+         if(node[k]===undefined)node[k]=node.getAttribute(a);
+         node.setAttribute(a,(d&&d[node[k]])||node[k]);
+       }
+     } else if(node.nodeType===3) {
+       if(node.__en===undefined)node.__en=node.data;
+       const key=node.__en.trim();
+       if(!key)continue;
+       const tr=d&&d[key];
+       node.data=tr?node.__en.replace(key,()=>tr):node.__en;
+     }
+   }
+ }
+ const setBtn = (id,msg) => {const el=$(id);el.textContent=msg;walk(el);};
+ function setLang(l) {
+   if(!TR[l]&&l!=='en')l='en';
+   lang=l;
+   try{localStorage.setItem('cloudcut_lang',l);}catch(e) {}
+   document.documentElement.lang=l;
+   document.documentElement.dir=l==='fa'?'rtl':'ltr';
+   document.title=t('CloudCut — Browser Video Editor');
+   document.querySelectorAll('#langs button').forEach(b=>b.classList.toggle('active',b.dataset.lang===l));
+   walk(document.body);
+   if(state.lastSay)say(state.lastSay[0],state.lastSay[1],state.lastSay[2]);
+   renderFiles(true);
+ }
+ function initialLang() {
+   try{const saved=localStorage.getItem('cloudcut_lang');if(saved)return saved;}catch(e) {}
+   const n=(navigator.language||'en').toLowerCase();
+   return n.startsWith('fa')?'fa':n.startsWith('zh')?'zh':'en';
+ }
+ $('langs').onclick=e=>{const b=e.target.closest('[data-lang]');if(b)setLang(b.dataset.lang);};
+
+ function say(message,kind='',vars) {
+   state.lastSay=[message,kind,vars];
+   $('status').textContent=t(message,vars);
+   $('status').className='status '+kind;
+ }
+
+ const addLog = m => {const l=$('log');l.textContent+=m+'\n';if(l.textContent.length>24000)l.textContent=l.textContent.slice(-14000);l.scrollTop=l.scrollHeight;};
+ const sizeText = n => n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB';
+ const ext = name => (name.split('.').pop()||'').toLowerCase();
+ const isVideo = f => f.type.startsWith('video/') || ['mp4','mov','m4v','mkv','webm','avi','mpeg','mpg','3gp','ts'].includes(ext(f.name));
+ const isAudio = f => f.type.startsWith('audio/') || ['mp3','wav','aac','m4a','ogg','flac','opus','wma'].includes(ext(f.name));
+ const isSubtitle = f => ['srt','ass','ssa','vtt'].includes(ext(f.name));
+ const isImage = f => f.type.startsWith('image/') || ['png','jpg','jpeg','webp','gif','bmp'].includes(ext(f.name));
+ const safeName = s => s.replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,90)||'media';
+ const value = (id,def) => {const raw=$(id).value;if(raw==='')return def;const n=Number(raw);return Number.isFinite(n)?n:def;};
+ const hasMedia = () => state.files.some(f=>isVideo(f)||isAudio(f));
+ const refreshExport = () => {$('export').disabled=state.busy||!hasMedia();};
+
+ /* ---------- files ---------- */
+ function addFiles(list) {
+   for (const f of list) {
+     if (!state.files.some(x=>x.name===f.name&&x.size===f.size&&x.lastModified===f.lastModified)) state.files.push(f);
+   }
+   renderFiles();
+   if (!state.loaded && !state.loading) loadEngine();
+ }
+ function fill(select,files,empty) {
+   const keep=select.value;
+   select.innerHTML='';
+   const first=document.createElement('option');first.value='';first.textContent=empty;select.append(first);
+   files.forEach(f=>{const o=document.createElement('option');o.value=f.name;o.textContent=f.name;select.append(o);});
+   if(files.some(f=>f.name===keep))select.value=keep;
+ }
+ function renderFiles(keep) {
+   const list=$('filelist');list.innerHTML='';
+   state.files.forEach((f,i)=>{
+     const row=document.createElement('div');row.className='fileitem';
+     const info=document.createElement('span');
+     info.textContent=(i+1)+'. '+f.name+' · '+sizeText(f.size)+' · '+t(isVideo(f)?'video':isAudio(f)?'audio':isSubtitle(f)?'subtitle':isImage(f)?'image':'file');
+     const btns=document.createElement('span');btns.className='btns';
+     const mk=(label,title,fn)=>{const b=document.createElement('button');b.textContent=label;b.title=title;b.onclick=fn;return b;};
+     btns.append(
+       mk('▲',t('Move up'),()=>{if(i>0){[state.files[i-1],state.files[i]]=[state.files[i],state.files[i-1]];renderFiles();}}),
+       mk('▼',t('Move down'),()=>{if(i<state.files.length-1){[state.files[i+1],state.files[i]]=[state.files[i],state.files[i+1]];renderFiles();}}),
+       mk('×',t('Remove file'),()=>{state.files.splice(i,1);renderFiles();})
+     );
+     row.append(info,btns);list.append(row);
+   });
+   fill($('subtitle'),state.files.filter(isSubtitle),'None');
+   fill($('audioFile'),state.files.filter(isAudio),'Choose loaded audio');
+   fill($('wmFile'),state.files.filter(isImage),'None');
+   walk($('subtitle').parentNode.parentNode.parentNode);
+   walk($('audioFile').parentNode);walk($('wmFile').parentNode);
+   if(!keep) {
+     const first=state.files.find(isVideo);
+     if(state.previewUrl){URL.revokeObjectURL(state.previewUrl);state.previewUrl=null;}
+     if(first){state.previewUrl=URL.createObjectURL(first);$('preview').src=state.previewUrl;}
+     else {$('preview').removeAttribute('src');$('preview').load();}
+   }
+   refreshExport();
+ }
+ $('files').addEventListener('change',e=>{addFiles(e.target.files);e.target.value='';});
+ $('drop').addEventListener('click',e=>{if(e.target.tagName!=='LABEL')$('files').click();});
+ $('drop').addEventListener('dragover',e=>{e.preventDefault();$('drop').classList.add('drag');});
+ $('drop').addEventListener('dragleave',()=> $('drop').classList.remove('drag'));
+ $('drop').addEventListener('drop',e=>{e.preventDefault();$('drop').classList.remove('drag');addFiles(e.dataTransfer.files);});
+ $('clear').onclick=()=>{state.files=[];renderFiles();};
+ $('tabs').onclick=e=>{
+   const b=e.target.closest('[data-tab]');if(!b)return;
+   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));
+   document.querySelectorAll('.section').forEach(x=>x.classList.toggle('active',x.id===b.dataset.tab));
+   if(b.dataset.tab==='merge'&&state.files.filter(isVideo).length>1)$('mergeOn').checked=true;
+ };
+ $('preset').onchange=()=>{
+   const v=$('preset').value;
+   if(v!=='custom'&&v!=='orig'){const [w,h]=v.split(':');$('width').value=w;$('height').value=h;}
+ };
+ $('setStart').onclick=()=>{$('start').value=$('preview').currentTime.toFixed(1);};
+ $('setEnd').onclick=()=>{$('end').value=$('preview').currentTime.toFixed(1);};
+
+ /* ---------- presets ---------- */
+ function resetAll() {
+   document.querySelectorAll('.tools input:not([type=file]),.tools select').forEach(el=>{
+     if(el.type==='checkbox')el.checked=el.defaultChecked;
+     else if(el.tagName==='SELECT')[...el.options].forEach(o=>{o.selected=o.defaultSelected;});
+     else el.value=el.defaultValue;
+   });
+ }
+ const set = (id,v) => {$(id).value=v;};
+ $('presets').onclick=e=>{
+   const b=e.target.closest('[data-preset]');if(!b)return;
+   const p=b.dataset.preset;
+   if(p==='reset'){resetAll();return;}
+   if(p==='tiktok'){set('preset','1080:1920');set('width',1080);set('height',1920);set('fit','crop');set('format','mp4');set('crf',23);}
+   if(p==='youtube'){set('preset','1920:1080');set('width',1920);set('height',1080);set('fit','contain');set('format','mp4');set('crf',20);set('encPreset','veryfast');}
+   if(p==='small'){set('preset','854:480');set('width',854);set('height',480);set('fit','contain');set('format','mp4');set('crf',30);set('encPreset','veryfast');}
+   if(p==='gif'){set('format','gif');set('gifFps',12);set('gifWidth',480);}
+   if(p==='mp3'){set('format','mp3');}
+   say('Preset applied: {0}. Adjust anything else, then Export.','ok',[b.textContent]);
+ };
+
+ /* ---------- FFmpeg engine (cross-origin worker fix) ---------- */
+ function loadScript(src) {
+   return new Promise((resolve,reject)=>{
+     const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('Could not load '+src));
+     document.head.appendChild(s);
+   });
+ }
+ async function blobURL(url,type) {
+   const response=await fetch(url);
+   if(!response.ok)throw new Error('Download failed ('+response.status+'): '+url);
+   return URL.createObjectURL(new Blob([await response.arrayBuffer()],{type}));
+ }
+ async function loadEngine() {
+   if(state.loaded||state.loading)return;
+   state.loading=true;$('load').disabled=true;setBtn('load','Loading FFmpeg…');
+   let lastErr=null;
+   for(const cdn of CDNS) {
+     try {
+       say('Downloading FFmpeg from {0}… (first load can take a moment)','',[cdn.replace('https://','')]);
+       const ffUrl=cdn+'/@ffmpeg/ffmpeg@'+FF_VER+'/dist/umd/ffmpeg.js';
+       if(!window.FFmpegWASM)await loadScript(ffUrl);
+       if(!window.FFmpegWASM)throw new Error('FFmpeg library did not initialise.');
+       // Find the worker chunk name (814.ffmpeg.js in 0.12.10) so this survives version changes.
+       let chunk='814.ffmpeg.js';
+       try {const src=await (await fetch(ffUrl)).text();const m=src.match(/(\d+\.ffmpeg\.js)/);if(m)chunk=m[1];} catch(e) {}
+       const ff=new window.FFmpegWASM.FFmpeg();
+       ff.on('log',({message})=>{if(message){addLog(message);if(state.sink)state.sink.push(message);}});
+       ff.on('progress',({progress})=>{
+         const p=Math.max(0,Math.min(1,progress))*100;$('bar').style.width=p.toFixed(1)+'%';
+         if(state.busy)say('Processing… {0}% (keep this tab open)','',[p.toFixed(0)]);
+       });
+       // ESM core: works whether FFmpeg's worker is a module worker (no importScripts) or a classic one.
+       const base=cdn+'/@ffmpeg/core@'+CORE_VER+'/dist/esm';
+       const classWorkerURL=await blobURL(cdn+'/@ffmpeg/ffmpeg@'+FF_VER+'/dist/umd/'+chunk,'text/javascript');
+       const coreURL=await blobURL(base+'/ffmpeg-core.js','text/javascript');
+       const wasmURL=await blobURL(base+'/ffmpeg-core.wasm','application/wasm');
+       await ff.load({classWorkerURL,coreURL,wasmURL});
+       state.ffmpeg=ff;state.loaded=true;state.fontReady=false;state.loading=false;
+       $('load').disabled=true;setBtn('load','FFmpeg ready');
+       refreshExport();say('FFmpeg is ready. Pick your tools and export.','ok');
+       return;
+     } catch(err) {lastErr=err;addLog('Load failed via '+cdn+': '+(err&&err.message?err.message:err));}
+   }
+   state.loading=false;$('load').disabled=false;setBtn('load','Retry loading FFmpeg');
+   say('Could not load FFmpeg: {0}\nCheck your internet connection or whether jsDelivr/unpkg are blocked.','error',[lastErr&&lastErr.message?lastErr.message:String(lastErr)]);
+ }
+ $('load').onclick=loadEngine;
+
+ /* ---------- ffmpeg helpers ---------- */
+ async function writeInput(file,index) {
+   const name='media_'+index+'_'+safeName(file.name);
+   await state.ffmpeg.writeFile(name,new Uint8Array(await file.arrayBuffer()));
+   return name;
+ }
+ async function probe(name) {
+   const lines=[];state.sink=lines;
+   try{await state.ffmpeg.exec(['-hide_banner','-i',name]);}catch(e) {}
+   state.sink=null;
+   const t=lines.join('\n');
+   const d=t.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+   const v=t.match(/Video:.*?,\s*(\d{2,5})x(\d{2,5})/);
+   return {
+     duration:d?(+d[1])*3600+(+d[2])*60+(+d[3]):0,
+     hasAudio:/Stream #[^\n]*Audio:/.test(t),
+     hasVideo:/Stream #[^\n]*Video:/.test(t),
+     w:v?+v[1]:0,h:v?+v[2]:0
+   };
+ }
+ async function ensureFont() {
+   if(state.fontReady)return;
+   let err=null;
+   for(const u of FONT_URLS) {
+     try {
+       const r=await fetch(u);if(!r.ok)throw new Error('HTTP '+r.status);
+       await state.ffmpeg.writeFile('/tmp/arial.ttf',new Uint8Array(await r.arrayBuffer()));
+       state.fontReady=true;return;
+     } catch(e) {err=e;}
+   }
+   throw E('Could not download the font needed for text/subtitles ({0}).',[err&&err.message]);
+ }
+ function atempo(s) {
+   const a=[];
+   while(s>2){a.push('atempo=2');s/=2;}
+   while(s<0.5){a.push('atempo=0.5');s/=0.5;}
+   a.push('atempo='+s.toFixed(4));
+   return a.join(',');
+ }
+ function outputSettings(format,hasAudioOut) {
+   const crf=Math.max(15,Math.min(40,Math.round(value('crf',23))));
+   const preset=$('encPreset').value;
+   if(format==='mp4'||format==='mkv') {
+     const a=['-c:v','libx264','-preset',preset,'-crf',String(crf),'-pix_fmt','yuv420p'];
+     if(format==='mp4')a.push('-movflags','+faststart');
+     if(hasAudioOut)a.push('-c:a','aac','-b:a','160k');
+     return a;
+   }
+   if(format==='webm') {
+     const a=['-c:v','libvpx-vp9','-crf',String(crf+7),'-b:v','0','-deadline','realtime','-cpu-used','8'];
+     if(hasAudioOut)a.push('-c:a','libopus');
+     return a;
+   }
+   if(format==='gif')return ['-loop','0'];
+   if(format==='jpg')return ['-frames:v','1','-q:v','2'];
+   if(format==='mp3')return ['-c:a','libmp3lame','-q:a','2'];
+   if(format==='wav')return ['-c:a','pcm_s16le'];
+   return [];
+ }
+ const MIME={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',gif:'image/gif',mp3:'audio/mpeg',wav:'audio/wav',jpg:'image/jpeg'};
+
+ /* ---------- export ---------- */
+ async function exportMedia() {
+   if(state.busy)return;
+   if(!state.loaded){await loadEngine();if(!state.loaded)return;}
+   const videos=state.files.filter(isVideo),audios=state.files.filter(isAudio);
+   const format=$('format').value;
+   const audioOnly=format==='mp3'||format==='wav';
+   const still=format==='gif'||format==='jpg';
+   const merge=$('mergeOn').checked&&videos.length>=2;
+   const mainFiles=(merge?videos:[videos[0]||(audioOnly?audios[0]:null)]).map(f=>f&&(state.transcoded.get(f)||f));
+   if(!mainFiles[0]){say('Please select a video first.','error');return;}
+   const audioMode=$('audioMode').value;
+   const addedAudio=state.files.find(f=>f.name===$('audioFile').value&&isAudio(f));
+   if((audioMode==='replace'||audioMode==='mix')&&!addedAudio){say('Select an audio file first (Audio tab).','error');return;}
+   const subFile=state.files.find(f=>f.name===$('subtitle').value&&isSubtitle(f));
+   const wmFile=state.files.find(f=>f.name===$('wmFile').value&&isImage(f));
+   if($('end').value!==''&&value('end',0)<=value('start',0)){say('End time must be greater than start time.','error');return;}
+   const total=mainFiles.reduce((s,f)=>s+f.size,0);
+   if(total>1.6*1024*1024*1024){say('These files are very large for browser memory (limit is roughly 2 GB). Try shorter clips.','error');return;}
+
+   state.busy=true;state.stopRequested=false;refreshExport();$('stop').disabled=false;$('bar').style.width='0%';
+   $('result').style.display='none';$('log').textContent='';
+   const written=[];
+   try {
+     say('Preparing selected files…');
+     const names=new Map();
+     const put=async f=>{if(!names.has(f)){const n=await writeInput(f,names.size);names.set(f,n);written.push(n);}return names.get(f);};
+     const mainNames=[];for(const f of mainFiles)mainNames.push(await put(f));
+     const infos=[];for(const n of mainNames)infos.push(await probe(n));
+     if(!audioOnly&&!infos[0].hasVideo){throw E('The selected file has no video stream.');}
+
+     const start=merge?0:Math.max(0,value('start',0));
+     const endRaw=$('end').value!==''?value('end',0):null;
+     const speed=value('speed',1)||1;
+     let srcDur=infos.reduce((s,i)=>s+i.duration,0);
+     let trimLen=srcDur;
+     if(!merge){trimLen=endRaw!==null?endRaw-start:(srcDur?srcDur-start:0);if(srcDur&&trimLen>srcDur-start)trimLen=srcDur-start;}
+     const outDur=trimLen>0?trimLen/speed:0;
+
+     const args=['-hide_banner','-y'];
+     if(!merge&&start>0)args.push('-ss',String(start));
+     let idx=0;
+     mainNames.forEach(n=>{args.push('-i',n);idx++;});
+     let wmIdx=-1,addIdx=-1,subIdx=-1;
+     if(wmFile&&!audioOnly){args.push('-i',await put(wmFile));wmIdx=idx++;}
+     if(addedAudio&&(audioMode==='replace'||audioMode==='mix')&&!still){args.push('-i',await put(addedAudio));addIdx=idx++;}
+     const softSub=subFile&&$('subMode').value==='soft'&&!still&&!audioOnly;
+     const hardSub=subFile&&$('subMode').value==='hard'&&!still&&!audioOnly;
+     if(subFile&&(softSub||hardSub)){const sn=await put(subFile);if(softSub){args.push('-i',sn);subIdx=idx++;}}
+
+     const g=[];
+     let vcur=null,acur=null;
+     const allAudio=infos.every(i=>i.hasAudio);
+     if(merge) {
+       const n=infos.length;
+       let W=infos[0].w||1280,H=infos[0].h||720;W-=W%2;H-=H%2;
+       const parts=[];
+       for(let i=0;i<n;i++) {
+         if(!audioOnly){g.push('['+i+':v]scale='+W+':'+H+':force_original_aspect_ratio=decrease,pad='+W+':'+H+':(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[mv'+i+']');parts.push('[mv'+i+']');}
+         if(allAudio){g.push('['+i+':a]aformat=sample_rates=44100:channel_layouts=stereo[ma'+i+']');parts.push('[ma'+i+']');}
+       }
+       if(audioOnly&&!allAudio)throw E('Every clip needs an audio stream to build audio-only output.');
+       g.push(parts.join('')+'concat=n='+n+':v='+(audioOnly?0:1)+':a='+(allAudio?1:0)+(audioOnly?'':'[vc]')+(allAudio?'[ac]':''));
+       vcur=audioOnly?null:'[vc]';acur=allAudio?'[ac]':null;
+       if(!allAudio)addLog('Some clips have no audio; merged output will have no audio.');
+     } else {
+       vcur='[0:v]';acur=infos[0].hasAudio?'[0:a]':null;
+     }
+
+     /* video filter chain */
+     let vfinal=null;
+     if(!audioOnly) {
+       const vf=[];
+       const ca=$('cropAspect').value;
+       if(ca){const [a,b]=ca.split(':');vf.push("crop='min(iw,ih*"+a+'/'+b+")':'min(ih,iw*"+b+'/'+a+")'");}
+       const rot=$('rotation').value;
+       if(rot==='90')vf.push('transpose=clock');
+       if(rot==='270')vf.push('transpose=cclock');
+       if(rot==='180')vf.push('hflip','vflip');
+       if($('flipH').checked)vf.push('hflip');
+       if($('flipV').checked)vf.push('vflip');
+       if($('preset').value!=='orig') {
+         let w=Math.max(2,Math.floor(value('width',1280))),h=Math.max(2,Math.floor(value('height',720)));
+         w-=w%2;h-=h%2;
+         const fit=$('fit').value;
+         if(fit==='stretch')vf.push('scale='+w+':'+h);
+         else if(fit==='crop')vf.push('scale='+w+':'+h+':force_original_aspect_ratio=increase','crop='+w+':'+h);
+         else vf.push('scale='+w+':'+h+':force_original_aspect_ratio=decrease','pad='+w+':'+h+':(ow-iw)/2:(oh-ih)/2');
+       }
+       const b=value('brightness',0),c=value('contrast',1),s=value('saturation',1),gm=value('gamma',1);
+       if(b!==0||c!==1||s!==1||gm!==1)vf.push('eq=brightness='+b+':contrast='+c+':saturation='+s+':gamma='+gm);
+       const fx=$('fx1').value;
+       if(fx==='gray')vf.push('hue=s=0');
+       if(fx==='sepia')vf.push('colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131');
+       if(fx==='negate')vf.push('negate');
+       if(fx==='blur')vf.push('boxblur=4');
+       if(fx==='sharpen')vf.push('unsharp=5:5:1.0');
+       if(fx==='denoise')vf.push('hqdn3d=4:3:6:4.5');
+       if(fx==='vignette')vf.push('vignette');
+       if($('reverse').checked)vf.push('reverse');
+       if(speed!==1)vf.push('setpts='+(1/speed)+'*PTS');
+       const fps=$('fps').value;
+       if(fps)vf.push('fps='+fps);
+       const fd=Math.max(0,value('fade',0));
+       if(fd>0&&outDur>fd*2&&!still)vf.push('fade=t=in:st=0:d='+fd,'fade=t=out:st='+(outDur-fd).toFixed(2)+':d='+fd);
+       const raw=$('overlayText').value.trim();
+       if(raw) {
+         await ensureFont();
+         await state.ffmpeg.writeFile('/tmp/overlay.txt',new TextEncoder().encode(raw));
+         written.push('/tmp/overlay.txt');
+         const xs=$('textX').value==='left'?'30':$('textX').value==='right'?'w-text_w-30':'(w-text_w)/2';
+         const ys=$('textY').value==='top'?'30':$('textY').value==='center'?'(h-text_h)/2':'h-text_h-35';
+         const color=$('fontColor').value.replace('#','0x');
+         let dt='drawtext=fontfile=/tmp/arial.ttf:textfile=/tmp/overlay.txt:expansion=none:fontsize='+Math.max(8,Math.min(200,value('fontSize',36)))+':fontcolor='+color+':x='+xs+':y='+ys+':box=1:boxcolor=black@0.4:boxborderw=8';
+         const tf=$('textFrom').value!=='',tt=$('textTo').value!=='';
+         if(tf||tt)dt+=":enable='between(t,"+(tf?value('textFrom',0):0)+','+(tt?value('textTo',0):999999)+")'";
+         vf.push(dt);
+       }
+       if(hardSub) {
+         await ensureFont();
+         vf.push("subtitles=filename="+names.get(subFile)+":fontsdir=/tmp:force_style='FontName=Arial,FontSize="+Math.max(8,value('subSize',24))+"'");
+       }
+       if(format!=='gif'&&format!=='jpg')vf.push('scale=trunc(iw/2)*2:trunc(ih/2)*2');
+       g.push(vcur+(vf.length?vf.join(','):'null')+'[vf]');
+       vfinal='[vf]';
+       if(wmIdx>=0) {
+         const pos={tl:'20:20',tr:'W-w-20:20',bl:'20:H-h-20',br:'W-w-20:H-h-20',c:'(W-w)/2:(H-h)/2'}[$('wmPos').value]||'W-w-20:H-h-20';
+         const wpx=Math.max(16,Math.floor(value('wmWidth',160)));
+         const op=Math.max(0,Math.min(1,value('wmOpacity',0.8)));
+         g.push('['+wmIdx+':v]scale='+wpx+':-1,format=rgba,colorchannelmixer=aa='+op+'[wm]');
+         g.push(vfinal+'[wm]overlay='+pos+'[vo]');
+         vfinal='[vo]';
+       }
+       if(format==='gif') {
+         const gf=Math.max(1,Math.min(30,Math.round(value('gifFps',12)))),gw=Math.max(64,Math.round(value('gifWidth',480)));
+         g.push(vfinal+'fps='+gf+',scale='+gw+':-1:flags=lanczos,split[g0][g1]');
+         g.push('[g0]palettegen[gp]');
+         g.push('[g1][gp]paletteuse[gout]');
+         vfinal='[gout]';
+       }
+     }
+
+     /* audio chain */
+     let aout=null,shortest=false;
+     if(!still&&audioMode!=='remove') {
+       const af=[];
+       const ov=Math.max(0,Math.min(3,value('origVol',1)));
+       if(ov!==1)af.push('volume='+ov);
+       if($('reverse').checked)af.push('areverse');
+       if(speed!==1)af.push(atempo(speed));
+       const fd=Math.max(0,value('fade',0));
+       if(fd>0&&outDur>fd*2)af.push('afade=t=in:st=0:d='+fd,'afade=t=out:st='+(outDur-fd).toFixed(2)+':d='+fd);
+       if($('normalize').checked)af.push('loudnorm');
+       const av=Math.max(0,Math.min(3,value('addedVol',1)));
+       if(audioMode==='replace'&&addIdx>=0) {
+         g.push('['+addIdx+':a]volume='+av+'[ao]');aout='[ao]';shortest=!audioOnly;
+       } else if(audioMode==='mix'&&addIdx>=0&&acur) {
+         g.push(acur+(af.length?af.join(','):'anull')+'[a0]');
+         g.push('['+addIdx+':a]volume='+av+'[a1]');
+         g.push('[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[ao]');aout='[ao]';
+       } else if(audioMode==='mix'&&addIdx>=0) {
+         g.push('['+addIdx+':a]volume='+av+'[ao]');aout='[ao]';shortest=!audioOnly;
+       } else if(acur) {
+         g.push(acur+(af.length?af.join(','):'anull')+'[ao]');aout='[ao]';
+       }
+       if(audioOnly&&!aout)throw E('No audio stream found in the selected file.');
+     }
+
+     args.push('-filter_complex',g.join(';'));
+     if(vfinal)args.push('-map',vfinal);
+     if(aout)args.push('-map',aout);
+     if(subIdx>=0){args.push('-map',subIdx+':0','-c:s',format==='mp4'?'mov_text':format==='webm'?'webvtt':'copy');}
+     if(!merge&&endRaw!==null&&format!=='jpg')args.push('-t',String(Math.max(0.1,endRaw-start)));
+     if(shortest)args.push('-shortest');
+     args.push(...outputSettings(format,!!aout));
+     const baseName=safeName($('filename').value||'edited-video').replace(/\.[^.]+$/,'');
+     const outName=baseName+'.'+format;
+     args.push(outName);
+
+     addLog('ffmpeg '+args.join(' '));
+     say('Processing in your browser. Keep this tab open; large files may take several minutes…');
+     const code=await state.ffmpeg.exec(args);
+     if(state.stopRequested)throw E('Processing stopped.');
+     if(code!==0)throw E('FFmpeg exited with code {0}. Open the FFmpeg log for details.',[code]);
+     const result=await state.ffmpeg.readFile(outName);
+     written.push(outName);
+     const mime=MIME[format]||'application/octet-stream';
+     const blob=new Blob([result.buffer],{type:mime});
+     if(state.outUrl)URL.revokeObjectURL(state.outUrl);
+     state.outUrl=URL.createObjectURL(blob);
+     ['resVideo','resAudio','resImg'].forEach(id=>{$(id).style.display='none';});
+     const el=mime.startsWith('video')?$('resVideo'):mime.startsWith('audio')?$('resAudio'):$('resImg');
+     el.src=state.outUrl;el.style.display='block';
+     $('dl').href=state.outUrl;$('dl').download=outName;$('result').style.display='block';
+     $('bar').style.width='100%';
+     say('Export complete: {0} ({1}). Preview below — tap Download to save.','ok',[outName,sizeText(result.length)]);
+   } catch(err) {
+     $('logbox').open=true;
+     if(/av1|Missing Sequence Header/i.test($('log').textContent)) {
+       say('This video uses the AV1 codec, which FFmpeg.wasm cannot decode.\nTap the button below: your browser (which can decode AV1) will play and re-encode it to WebM in real time, then the export retries automatically. Keep this tab open and in front.','error');
+       $('av1btn').style.display='inline-block';
+       return;
+     }
+     say('Export failed: {0}\nTry a shorter clip, MP4 input, or fewer options at once. The FFmpeg build may not include a requested filter or codec.','error',[errMsg(err)]);
+   } finally {
+     if(state.ffmpeg)for(const n of written){try{await state.ffmpeg.deleteFile(n);}catch(e) {}}
+     state.busy=false;$('stop').disabled=true;refreshExport();
+   }
+ }
+ /* ---------- AV1 fallback: re-encode with the browser's own decoder ---------- */
+ async function browserTranscode(file) {
+   const url=URL.createObjectURL(file);
+   const v=document.createElement('video');
+   v.src=url;v.playsInline=true;v.preload='auto';
+   await new Promise((res,rej)=>{v.onloadedmetadata=res;v.onerror=()=>rej(E('Your browser cannot decode this video either.'));});
+   if(!v.captureStream)throw E('This browser cannot capture video (try Chrome, Edge or Firefox on desktop).');
+   const ac=new (window.AudioContext||window.webkitAudioContext)();
+   await ac.resume();
+   const dest=ac.createMediaStreamDestination();
+   try{ac.createMediaElementSource(v).connect(dest);}catch(e) {}
+   const vs=v.captureStream();
+   const stream=new MediaStream([...vs.getVideoTracks(),...dest.stream.getAudioTracks()]);
+   const mime=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'].find(m=>MediaRecorder.isTypeSupported(m));
+   if(!mime)throw E('This browser cannot record WebM.');
+   const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8000000});
+   const chunks=[];
+   rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+   const stopped=new Promise(r=>{rec.onstop=r;});
+   const total=v.duration||0;
+   v.ontimeupdate=()=>{if(total){const p=v.currentTime/total*100;$('bar').style.width=p.toFixed(1)+'%';say('Re-encoding with browser decoder: {0}% (real time, keep this tab open)','',[p.toFixed(0)]);}};
+   rec.start(1000);
+   await v.play();
+   await new Promise(res=>{
+     v.onended=res;
+     const t=setInterval(()=>{if(state.abortTranscode){clearInterval(t);res();}},300);
+     v.addEventListener('ended',()=>clearInterval(t));
+   });
+   v.pause();
+   if(rec.state!=='inactive')rec.stop();
+   await stopped;
+   stream.getTracks().forEach(t=>t.stop());
+   try{await ac.close();}catch(e) {}
+   URL.revokeObjectURL(url);
+   if(state.abortTranscode)throw E('Re-encoding cancelled.');
+   const base=file.name.replace(/\.[^.]+$/,'');
+   return new File(chunks,base+'_browser.webm',{type:'video/webm'});
+ }
+ $('av1btn').onclick=async()=>{
+   $('av1btn').style.display='none';
+   const vids=state.files.filter(isVideo);
+   const targets=($('mergeOn').checked&&vids.length>=2)?vids:[vids[0]];
+   state.busy=true;state.transcoding=true;state.abortTranscode=false;refreshExport();$('stop').disabled=false;
+   try {
+     for(const f of targets) {
+       if(!f||state.transcoded.has(f))continue;
+       state.transcoded.set(f,await browserTranscode(f));
+     }
+   } catch(err) {
+     state.busy=false;state.transcoding=false;$('stop').disabled=true;refreshExport();
+     say('Browser re-encode failed: {0}','error',[errMsg(err)]);return;
+   }
+   state.busy=false;state.transcoding=false;$('stop').disabled=true;refreshExport();
+   $('log').textContent='';
+   exportMedia();
+ };
+ $('export').onclick=exportMedia;
+ $('stop').onclick=async()=>{
+   if(state.transcoding){state.abortTranscode=true;return;}
+   if(!state.busy)return;
+   state.stopRequested=true;$('stop').disabled=true;
+   try{await state.ffmpeg.terminate();}catch(e) {}
+   state.ffmpeg=null;state.loaded=false;state.fontReady=false;
+   $('load').disabled=false;setBtn('load','Reload FFmpeg engine');
+   say('Stopped. Reload the FFmpeg engine before the next export.','error');
+ };
+ state.lastSay=['Select media files — FFmpeg loads automatically.',''];
+ renderFiles();
+ setLang(initialLang());
+})();
+</script>
+</body>
+</html>`;
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", {
+        status: 405,
+        headers: { "Allow": "GET, HEAD" }
+      });
+    }
+    if (url.pathname === "/favicon.ico") {
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname !== "/" && url.pathname !== "/index.html") {
+      return new Response("Not Found", { status: 404 });
+    }
+    return new Response(request.method === "HEAD" ? null : HTML, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        // 'unsafe-eval' + 'wasm-unsafe-eval' are required: the FFmpeg core (Emscripten) evaluates code and compiles WebAssembly inside the worker.
+        // blob: workers/scripts let FFmpeg run its worker from same-origin blob URLs on any domain.
+        "Content-Security-Policy": "default-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://static.cloudflareinsights.com blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' blob: https://cdn.jsdelivr.net https://unpkg.com https://cloudflareinsights.com; worker-src 'self' blob:"
+      }
+    });
+  }
+};
