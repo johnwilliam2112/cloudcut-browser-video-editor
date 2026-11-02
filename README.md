@@ -156,10 +156,7 @@ cloudcut-browser-video-editor/
 
 ## 📜 License
 
-No open-source license has currently been specified.
-
-Unless a license is added, all rights are reserved by the repository owner.
-
+all rights are reserved by the repository owner.
 ---
 
 **CloudCut – Edit videos anywhere, directly in your browser.**
