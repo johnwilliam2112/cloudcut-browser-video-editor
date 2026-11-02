@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+  "name": "cloudcut-browser-video-editor",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-02"
+}
