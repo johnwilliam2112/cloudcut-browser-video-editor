@@ -1,13 +1,12 @@
-CloudCut – Browser Video Editor
+# CloudCut – Browser Video Editor
 
 A powerful, mobile-friendly, browser-based video editor powered by Cloudflare Workers and FFmpeg.wasm.
 
 CloudCut lets you edit videos directly in your browser without installing desktop software. Video processing runs locally in the browser.
 
-✨ Features
+## ✨ Features
 
-Video Editing
-
+### Video Editing
 - Trim and cut videos
 - Merge multiple videos
 - Resize and crop videos
@@ -19,35 +18,33 @@ Video Editing
 - Add image watermarks
 - Add subtitles
 
-Audio Editing
-
+### Audio Editing
 - Remove or replace audio
 - Mix audio tracks
 - Normalize audio
 - Fade audio in and out
 - Export audio separately
 
-Supported Formats
+### Supported Formats
 
-Type| Formats
-Video| MP4, WebM, MKV
-Audio| MP3, WAV
-Animation| GIF
-Images| JPG
-Subtitles| SRT, ASS, SSA, VTT
+| Type | Formats |
+|---|---|
+| Video | MP4, WebM, MKV |
+| Audio | MP3, WAV |
+| Animation | GIF |
+| Images | JPG |
+| Subtitles | SRT, ASS, SSA, VTT |
 
 Actual codec support depends on the FFmpeg.wasm build.
 
-Export Presets
-
+### Export Presets
 - YouTube 1080p
 - Vertical video (9:16)
 - Smaller file size
 - GIF export
 - MP3 audio export
 
-Other Features
-
+### Other Features
 - Mobile-friendly interface
 - Multiple media file selection
 - English, Persian and Chinese languages
@@ -56,11 +53,11 @@ Other Features
 
 ---
 
-🚀 Deploy to Cloudflare
+## 🚀 Deploy to Cloudflare
 
 Deploy your own CloudCut instance to Cloudflare Workers with one click.
 
-""Deploy to Cloudflare" (https://deploy.workers.cloudflare.com/button)" (https://deploy.workers.cloudflare.com/?url=https://github.com/johnwilliam2112/cloudcut-browser-video-editor)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/johnwilliam2112/cloudcut-browser-video-editor)
 
 1. Click the Deploy to Cloudflare button.
 2. Sign in to your Cloudflare account.
@@ -72,45 +69,53 @@ Each user gets their own independent Cloudflare Worker deployment.
 
 ---
 
-🛠 Manual Installation
+## 🛠 Manual Installation
 
 You can also deploy CloudCut manually.
 
-Option 1 – Cloudflare Dashboard
+### Option 1 – Cloudflare Dashboard
 
-1. Open "Cloudflare Dashboard" (https://dash.cloudflare.com/).
-2. Navigate to Workers & Pages.
+1. Open [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. Navigate to **Workers & Pages**.
 3. Create a new Worker.
 4. Open the code editor.
-5. Copy the contents of "worker.js".
+5. Copy the contents of `worker.js`.
 6. Replace the default Worker code.
 7. Save and deploy.
 
-Option 2 – Wrangler CLI
+### Option 2 – Wrangler CLI
 
 Clone the repository:
 
+```bash
 git clone https://github.com/johnwilliam2112/cloudcut-browser-video-editor.git
+```
 
 Enter the project directory:
 
+```bash
 cd cloudcut-browser-video-editor
+```
 
-Create "wrangler.jsonc":
+Create `wrangler.jsonc`:
 
+```json
 {
   "name": "cloudcut-browser-video-editor",
   "main": "worker.js",
   "compatibility_date": "2026-11-02"
 }
+```
 
 Deploy:
 
+```bash
 npx wrangler deploy
+```
 
 ---
 
-⚙️ Technology
+## ⚙️ Technology
 
 - Cloudflare Workers
 - HTML5
@@ -121,7 +126,7 @@ npx wrangler deploy
 
 No Node.js application server or server-side video processing is required.
 
-🔒 Privacy
+## 🔒 Privacy
 
 CloudCut is designed to process selected media files locally in the user's browser.
 
@@ -130,7 +135,7 @@ CloudCut is designed to process selected media files locally in the user's brows
 - FFmpeg.wasm and other runtime assets are loaded from external CDNs.
 - Processing happens on the user's device.
 
-⚠️ Requirements and Limitations
+## ⚠️ Requirements and Limitations
 
 - A modern browser is recommended.
 - An internet connection is required to load external FFmpeg.wasm assets.
@@ -139,15 +144,17 @@ CloudCut is designed to process selected media files locally in the user's brows
 - Some codecs and operations depend on the FFmpeg.wasm build.
 - Keep the browser tab open during processing and exporting.
 
-📂 Repository Structure
+## 📂 Repository Structure
 
+```text
 cloudcut-browser-video-editor/
 │
 ├── worker.js
 ├── wrangler.jsonc
 └── README.md
+```
 
-📜 License
+## 📜 License
 
 No open-source license has currently been specified.
 
@@ -155,8 +162,8 @@ Unless a license is added, all rights are reserved by the repository owner.
 
 ---
 
-CloudCut – Edit videos anywhere, directly in your browser.
+**CloudCut – Edit videos anywhere, directly in your browser.**
 
 Made with ❤️ using Cloudflare Workers and FFmpeg.wasm.
 
-"GitHub Repository" (https://github.com/johnwilliam2112/cloudcut-browser-video-editor)
+[GitHub Repository](https://github.com/johnwilliam2112/cloudcut-browser-video-editor)
